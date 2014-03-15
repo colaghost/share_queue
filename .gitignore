@@ -1,0 +1,5 @@
+*.o
+test
+clear_share
+test_pop
+test_push
