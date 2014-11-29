@@ -6,7 +6,7 @@ int main()
 {
 	char buf[1024] = {0};
 	unsigned int len = 1024;
-	const char *key_path = "/Users/zhanggx/code/share_queue/share_queue.key";
+	const char *key_path = "/Users/zhanggx/code/share_queue/test/share_queue.key";
 	shm_queue_t queue;
 	if (shm_queue_init(&queue, key_path, SHM_SIZE))
 	{

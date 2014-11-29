@@ -16,7 +16,7 @@ int main()
 
 	//key = ftok("/Users/zhanggx/code/share_queue/share_queue.key", 0);
 
-	if (shm_queue_init(&queue, "/Users/zhanggx/code/share_queue/share_queue.key", SHM_SIZE))
+	if (shm_queue_init(&queue, "/Users/zhanggx/code/share_queue/test/share_queue.key", SHM_SIZE))
 	{
 		perror("shm_queue_init failed");
 		return -1;
