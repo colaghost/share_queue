@@ -210,9 +210,7 @@ int shm_queue_push(shm_queue_t *queue, const void *buf, unsigned len)
 				return -1;
 			continue;
 		}
-		shm_queue_stat(queue);
 		ret = shm_queue_internal_push(queue, buf, len);
-		shm_queue_stat(queue);
 		sem_lock_release(queue->queue_lock);
 		sem_lock_notify(queue->empty_lock);
 		break;
@@ -290,9 +288,7 @@ int shm_queue_pop(shm_queue_t *queue, void *buf, unsigned *len)
 			continue;
 		}
 
-		shm_queue_stat(queue);
 		ret = shm_queue_internal_pop(queue, buf, len);
-		shm_queue_stat(queue);
 		sem_lock_release(queue->queue_lock);
 		sem_lock_notify(queue->full_lock);
 		break;
