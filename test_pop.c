@@ -1,7 +1,7 @@
 #include "share_queue.h"
 #include <stdio.h>
 
-#define SHM_SIZE 13
+#define SHM_SIZE 9
 int main()
 {
 	char buf[1024] = {0};

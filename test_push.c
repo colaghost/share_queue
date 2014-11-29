@@ -1,7 +1,7 @@
 #include "share_queue.h"
 #include <stdio.h>
 
-#define SHM_SIZE 13
+#define SHM_SIZE 18
 int main()
 {
 	const char *data = "hello";
@@ -13,12 +13,15 @@ int main()
 		return -1;
 	}
 
-	if (shm_queue_push(&queue, data, 5))
+	for (size_t i = 0; i < 1; ++i)
 	{
-		perror("shm_queue_push failed");
-		return -1;
+		if (shm_queue_push(&queue, data, 5))
+		{
+			perror("shm_queue_push failed");
+			return -1;
+		}
+		printf("push success\n");
 	}
-	printf("push success\n");
 	shm_queue_clear(&queue, 0);
 	return 0;
 }

@@ -3,7 +3,7 @@
 #include <unistd.h>
 #include <string.h>
 
-#define SHM_SIZE 13
+#define SHM_SIZE 11
 
 int main()
 {
@@ -22,13 +22,15 @@ int main()
 		return -1;
 	}
 
-	for (; i < 10; ++i)
+	for (; i < 2; ++i)
 	{
 		len = 1024;
 		memset(buf, 0, 1024);
 		if (shm_queue_push(&queue, data, 5) == 0)
 		{
+			shm_queue_stat(&queue);
 			shm_queue_pop(&queue, buf, &len);
+			shm_queue_stat(&queue);
 			printf("%d:%s\n", len, buf);
 		}
 	}

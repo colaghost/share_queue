@@ -15,8 +15,7 @@ int shm_queue_init(shm_queue_t *queue, const char *path, unsigned int size)
 	int queue_exists = 0;
 	key_t queue_key, queue_lock_key, empty_lock_key, full_lock_key;
 
-	if (queue == NULL || path == NULL)
-		return -2;
+	assert(queue && path);
 
 	queue_key = ftok(path, 0);
 	queue_lock_key = ftok(path, 1);
@@ -49,12 +48,10 @@ int shm_queue_init(shm_queue_t *queue, const char *path, unsigned int size)
 
 	queue->queue_info = (queue_info_t*)shmptr;
 	queue->start = (char*)shmptr + sizeof(queue_info_t);
-	if (!queue_exists)
-	{
-		queue->queue_info->push_pos = queue->queue_info->pop_pos = 0;
-		queue->queue_info->size = size;
-	}
 
+	queue_info_t *info = queue->queue_info;
+
+	//初始化
 	queue->queue_lock = (sem_lock_t*)calloc(1, sizeof(sem_lock_t));
 	queue->empty_lock = (sem_lock_t*)calloc(1, sizeof(sem_lock_t));
 	queue->full_lock = (sem_lock_t*)calloc(1, sizeof(sem_lock_t));
@@ -67,6 +64,14 @@ int shm_queue_init(shm_queue_t *queue, const char *path, unsigned int size)
 		goto ERR_PROCESS;
 	}
 
+	if (!queue_exists)
+	{
+		info->push_pos = 0;
+		info->pop_pos = 0;
+		info->left_size = size;
+		info->size = size;
+	}
+
 	return 0;
 
 ERR_PROCESS:
@@ -76,8 +81,7 @@ ERR_PROCESS:
 
 void shm_queue_clear(shm_queue_t *queue, int destroy)
 {
-	if (queue == NULL)
-		return;
+	assert(queue);
 
 	shmdt((void*)queue->queue_info);
 	if (destroy)
@@ -107,61 +111,90 @@ void shm_queue_clear(shm_queue_t *queue, int destroy)
 static int shm_queue_internal_push(shm_queue_t *queue, const void *buf, unsigned len)
 {
 	queue_info_t *info = queue->queue_info;
-	printf("%s:%u:%u\n", __func__, info->push_pos, info->pop_pos);
 
+	char *len_write_start = NULL;
+	char *data_write_start = NULL;
+	unsigned int update_push_pos = 0;
+	unsigned int update_left_size = info->left_size;
+
+	if (update_left_size < len + sizeof(len))
+		return 1;
+
+	/* -可用 *数据
+	 * |queue_head_left|********|queue_tail_left|
+	 * |---------------pop***push---------------| 这种情况
+	 */
 	if (info->push_pos >= info->pop_pos)
 	{
 		unsigned int queue_tail_left = info->size - info->push_pos;
 		unsigned int queue_head_left = info->pop_pos;
-		if (queue_tail_left >= (sizeof(len) + len))
+
+		//尾部剩余空间足够放长度信息和整个数据
+		if (queue_tail_left >= sizeof(len) + len)
 		{
-			memcpy(queue->start + info->push_pos, (const void*)&len, sizeof(len));
-			memcpy(queue->start + info->push_pos + sizeof(len), buf, len);
-			info->push_pos += (len + sizeof(len));
-			return 0;
+			len_write_start = queue->start + info->push_pos;
+			data_write_start = len_write_start + sizeof(len);
+
+			update_push_pos = info->push_pos + len + sizeof(len);
+			update_left_size -= (len + sizeof(len));
 		}
-		else if (queue_tail_left >= sizeof(len))
+		//尾部剩余空间仅够放长度信息，但是头部剩余空间足够放整个数据
+		else if (queue_head_left >= sizeof(len) && queue_tail_left >= len)
 		{
-			if (queue_head_left >= (len - (queue_tail_left - sizeof(len))))
-			{
-				unsigned left_len = len - (queue_tail_left - sizeof(len));
-				memcpy(queue->start + info->push_pos, (const void*)&(len), sizeof(len));
-				memcpy(queue->start + info->push_pos + sizeof(len), buf, queue_tail_left - sizeof(len));
-				memcpy(queue->start, buf + queue_tail_left - sizeof(len), left_len);
-				info->push_pos = left_len;
-				return 0;
-			}
+			len_write_start = queue->start + info->push_pos;
+			data_write_start = queue->start;
+
+			update_push_pos = len;
+			update_left_size -= (queue_tail_left + len);
 		}
-		else if (queue_head_left >= (sizeof(len) + len))
+		//尾部剩余空间不够放长度信息，但头部剩余空间足够放长度信息和整个数据
+		else if (queue_head_left >= len + sizeof(len))
 		{
-			memcpy(queue->start, (const void*)&(len), sizeof(len));
-			memcpy(queue->start + sizeof(len), buf, len);
-			info->push_pos = len + sizeof(len);
-			return 0;
+			len_write_start = queue->start;
+			data_write_start = queue->start + sizeof(len);
+
+			update_push_pos = len + sizeof(len);
+			update_left_size -= (queue_tail_left + len + sizeof(len));
+		}
+		//没有足够空间
+		else
+		{
+			return 1;
 		}
 	}
+	/* |*************push---------pop**********|
+	 */
 	else
 	{
-		unsigned left_len = info->pop_pos - info->push_pos;
+		unsigned int left_len = info->pop_pos - info->push_pos;
 		if (left_len >= sizeof(len) + len)
 		{
-			memcpy(queue->start + info->push_pos, (const void*)&(len), sizeof(len));
-			memcpy(queue->start + info->push_pos + sizeof(len), buf, len);
-			info->push_pos += (len + sizeof(len));
-			return 0;
+			len_write_start = queue->start + info->push_pos;
+			data_write_start = len_write_start + sizeof(len);
+
+			update_push_pos = info->push_pos + len + sizeof(len);
+			update_left_size -= (len + sizeof(len));
+		}
+		else
+		{
+			return 1;
 		}
 	}
-	return 1;
+
+	memcpy(len_write_start, (const void*)&len, sizeof(len));
+	memcpy(data_write_start, buf, len);
+
+	//修正
+	info->push_pos = update_push_pos >= info->size ? 0 : update_push_pos;
+	info->left_size = update_left_size;
+
+	return 0;
 }
 
 int shm_queue_push(shm_queue_t *queue, const void *buf, unsigned len)
 {
 	int ret = 0;
-	if (queue == NULL || 
-			buf == NULL || 
-			len == 0 || 
-			len > queue->queue_info->size - sizeof(len))
-		return -2;
+	assert(queue && buf && (len != 0));
 
 	while (1)
 	{
@@ -169,7 +202,7 @@ int shm_queue_push(shm_queue_t *queue, const void *buf, unsigned len)
 		{
 			return -1;
 		}
-		if (shm_queue_size(queue) < len + sizeof(len))
+		if (shm_queue_left_size(queue) < len + sizeof(len))
 		{
 			if (sem_lock_release(queue->queue_lock))
 				return -1;
@@ -177,7 +210,9 @@ int shm_queue_push(shm_queue_t *queue, const void *buf, unsigned len)
 				return -1;
 			continue;
 		}
+		shm_queue_stat(queue);
 		ret = shm_queue_internal_push(queue, buf, len);
+		shm_queue_stat(queue);
 		sem_lock_release(queue->queue_lock);
 		sem_lock_notify(queue->empty_lock);
 		break;
@@ -187,52 +222,60 @@ int shm_queue_push(shm_queue_t *queue, const void *buf, unsigned len)
 
 static int shm_queue_internal_pop(shm_queue_t *queue, void *buf, unsigned *len)
 {
-	unsigned data_len = 0;
+	unsigned int data_len = 0;
 	queue_info_t *info = queue->queue_info;
-	printf("%s:%u:%u\n", __func__, info->push_pos, info->pop_pos);
-	if (info->pop_pos > info->push_pos && 
-			info->pop_pos + sizeof(*len) > info->size)
-		info->pop_pos = 0;
+	unsigned int update_pop_pos = info->pop_pos;
+	unsigned int update_left_size = info->left_size;
 
-	if (info->push_pos > info->pop_pos)
+	//没有数据
+	if (update_left_size == info->size)
 	{
-		data_len = *(unsigned int*)(queue->start + info->pop_pos);
-		if (data_len > *len)
-			return data_len;
-		*len = data_len;
-		memcpy(buf, (const void*)(queue->start + info->pop_pos + sizeof(*len)), data_len);
-		info->pop_pos += data_len + sizeof(*len);
-		return 0;
+		return 1;
 	}
-	else if (info->pop_pos > info->push_pos)
+
+	//剩下的空间不足放长度信息，那就跳过吧
+	if (update_pop_pos >= info->push_pos && 
+			update_pop_pos + sizeof(*len) > info->size)
 	{
-		unsigned left_len = 0;
-		left_len = info->size - info->pop_pos - sizeof(*len);
-		data_len = *(unsigned int*)(queue->start + info->pop_pos);
-		if (data_len > *len)
-			return data_len;
-		*len = data_len;
-		if (left_len >= data_len)
-		{
-			memcpy(buf, queue->start + info->pop_pos + sizeof(*len), data_len);
-			info->pop_pos += data_len + sizeof(*len);
-		}
-		else
-		{
-			memcpy(buf, queue->start + info->pop_pos + sizeof(*len), left_len);
-			memcpy(buf + left_len, queue->start, data_len - left_len);
-			info->pop_pos = data_len - left_len;
-		}
-		return 0;
+		update_pop_pos = 0;
+		update_left_size += (info->size - info->pop_pos);
 	}
-	return 1;
+
+	data_len = *(unsigned int*)(queue->start + update_pop_pos);
+	if (data_len > *len)
+	{
+		return data_len;
+	}
+
+	*len = data_len;
+
+	char *data_start = queue->start + update_pop_pos + sizeof(*len);
+	if (update_pop_pos >= info->push_pos &&
+			info->size - update_pop_pos - sizeof(*len) < data_len)
+	{
+		data_start = queue->start;
+		update_pop_pos = data_len;
+		update_left_size += (info->size - update_pop_pos + data_len);
+	}
+	else
+	{
+		update_pop_pos += data_len + sizeof(data_len);
+		update_left_size += data_len + sizeof(data_len);
+	}
+
+	memcpy(buf, (const void*)data_start, data_len);
+
+	//修正
+	info->pop_pos = update_pop_pos >= info->size ? 0 : update_pop_pos;
+	info->left_size = update_left_size;
+
+	return 0;
 }
 
 int shm_queue_pop(shm_queue_t *queue, void *buf, unsigned *len)
 {
 	int ret = 0;
-	if (queue == NULL || buf == NULL || len == NULL)
-		return -1;
+	assert(queue && buf && len);
 
 	while (1)
 	{
@@ -247,7 +290,9 @@ int shm_queue_pop(shm_queue_t *queue, void *buf, unsigned *len)
 			continue;
 		}
 
+		shm_queue_stat(queue);
 		ret = shm_queue_internal_pop(queue, buf, len);
+		shm_queue_stat(queue);
 		sem_lock_release(queue->queue_lock);
 		sem_lock_notify(queue->full_lock);
 		break;
@@ -257,23 +302,48 @@ int shm_queue_pop(shm_queue_t *queue, void *buf, unsigned *len)
 
 unsigned int shm_queue_size(shm_queue_t *queue)
 {
-	if (queue == NULL)
-		return 0;
+	assert(queue);
+	return queue->queue_info->size;
+}
 
+unsigned int shm_queue_left_size(shm_queue_t *queue)
+{
+	assert(queue);
+	//可能需要做修正
 	queue_info_t *info = queue->queue_info;
-	if (info->push_pos >= info->pop_pos)
+	if (info->push_pos == info->pop_pos)
 	{
-		return (info->size - info->push_pos) + info->pop_pos;
+		//发生这种情况只能丢掉数据了
+		if (info->left_size != info->size && info->left_size != 0)
+		{
+			info->left_size = info->size;
+		}
+	}
+	else if (info->push_pos > info->pop_pos)
+	{
+		info->left_size = info->size - info->push_pos + info->pop_pos;
 	}
 	else
 	{
-		return (info->pop_pos - info->push_pos);
+		info->left_size = info->pop_pos - info->push_pos;
 	}
+	return queue->queue_info->left_size;
 }
 
 int shm_queue_empty(shm_queue_t *queue)
 {
 	if (queue == NULL)
 		return 1;
-	return (queue->queue_info->push_pos == queue->queue_info->pop_pos);
+	return (shm_queue_left_size(queue) == shm_queue_size(queue));
+}
+
+void shm_queue_stat(shm_queue_t *queue)
+{
+	if (queue == NULL)
+		return;
+	printf("queue_size:       %u\n", queue->queue_info->size);
+	printf("queue_left_size:  %u\n", queue->queue_info->left_size);
+	printf("queue_push_pos:   %u\n", queue->queue_info->push_pos);
+	printf("queue_pop_pos:    %u\n", queue->queue_info->pop_pos);
+	printf("====================\n");
 }

@@ -1,6 +1,6 @@
 #include "share_queue.h"
 #include <stdio.h>
-#define SHM_SIZE 13
+#define SHM_SIZE 18
 int main()
 {
 	const char *key_path = "/Users/zhanggx/code/share_queue/share_queue.key";
